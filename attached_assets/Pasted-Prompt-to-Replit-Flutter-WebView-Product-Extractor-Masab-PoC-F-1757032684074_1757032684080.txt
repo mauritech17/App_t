@@ -1,0 +1,186 @@
+Prompt to Replit (Flutter WebView Product Extractor — Masab PoC)
+
+أريد إنشاء تطبيق موبايل باستخدام Flutter (Dart) باسم: masab_app.
+هدف التطبيق: فتح مواقع (Shein, Noon, Amazon.ae) داخل WebView، واستخراج بيانات المنتج أو السلة وعرضها في شاشة نتائج. بدون تسجيل دخول، بدون حالات طلب أو دفع. مجرد إثبات فكرة الاستخراج.
+
+المتطلبات التقنية
+
+Flutter SDK حديث (3.x+)
+
+المنصات المستهدفة: Android + iOS
+
+الحزم:
+
+webview_flutter
+
+flutter_riverpod
+
+fluttertoast
+
+path_provider + permission_handler (اختياريان للتخزين)
+
+بنية المشروع
+lib/
+  main.dart
+  router.dart
+  screens/
+    stores_screen.dart
+    webview_screen.dart
+    results_screen.dart
+  state/
+    extract_store.dart
+    models.dart
+  widgets/
+    fab.dart
+  services/
+    js_injector.dart
+    domain_detector.dart
+assets/
+  injection/
+    bootstrap.js
+    collectors.js
+    adapters/
+      shein.js
+      noon.js
+      amazon-ae.js
+pubspec.yaml
+README.md
+
+تفاصيل الملفات
+models.dart
+
+تعريف الأنواع: Price, Item, Snapshot (مثلما شرحت سابقًا).
+
+extract_store.dart
+
+حالة Riverpod لتخزين snapshots والعناصر.
+
+stores_screen.dart
+
+أزرار: Open Shein, Open Noon, Open Amazon.ae → تفتح WebViewScreen مع URL.
+
+webview_screen.dart
+
+WebView مع JavaScript مفعّل.
+
+تحميل:
+
+bootstrap.js
+
+collectors.js
+
+adapter حسب الدومين.
+
+قناة JavaScriptChannel باسم TalaBridge لاستقبال Snapshots كـ JSON.
+
+FAB: Collect Product, Collect Cart, Results.
+
+results_screen.dart
+
+قائمة العناصر (صورة + اسم + سعر).
+
+أزرار (لـ Dev فقط): Copy JSON / Save JSON / Clear / Sample Item.
+
+fab.dart
+
+مكوّن زر عائم بأكثر من خيار.
+
+js_injector.dart
+
+تحميل السكربتات من الأصول ودمجها.
+تحديد أي adapter يناسب الدومين الحالي.
+
+domain_detector.dart
+
+Mapping:
+
+*shein* → shein.js
+
+*noon* → noon.js
+
+*amazon.ae* → amazon-ae.js
+
+bootstrap.js
+
+يجهّز window.__masab كـ namespace.
+
+دالة post(payload) ترسل الرسائل عبر TalaBridge.
+
+Patch fetch وXMLHttpRequest → حفظ ردود /cart//api/cart.
+
+Utilities: readJSONLD, q, qa, absUrl.
+
+collectors.js
+
+detectPage(), collectProduct(), collectCart().
+
+يجرّب JSON-LD → DOM → META.
+
+يرسل Snapshot عبر TalaBridge.postMessage.
+
+Adapters (shein.js, noon.js, amazon-ae.js)
+
+Selectors خاصة لكل متجر (منتج + سلة).
+
+مرنة، وتجرب بدائل متعددة.
+
+pubspec.yaml
+flutter:
+  assets:
+    - assets/injection/bootstrap.js
+    - assets/injection/collectors.js
+    - assets/injection/adapters/shein.js
+    - assets/injection/adapters/noon.js
+    - assets/injection/adapters/amazon-ae.js
+
+واجهة المستخدم
+
+StoresScreen: أزرار المتاجر.
+
+WebViewScreen: عرض الموقع + أزرار FAB.
+
+ResultsScreen: قائمة المنتجات المستخرجة + أزرار Dev.
+
+README (يُنشأ)
+
+flutter pub get
+
+شغّل:
+
+Android: flutter run -d android
+
+iOS: flutter run -d ios
+
+افتح متجر (Shein/Noon/Amazon.ae).
+
+انتقل لصفحة منتج أو السلة.
+
+اضغط Collect Product / Collect Cart.
+
+راجع النتائج في ResultsScreen.
+
+مهام على Replit Agent الآن
+
+تهيئة مشروع Flutter باسم masab_app.
+
+إضافة الحزم المطلوبة.
+
+إنشاء الملفات والمجلدات المذكورة.
+
+كتابة الكود لـ WebView + JavaScriptChannel + الحقن.
+
+بناء UI بسيط (Material 3).
+
+تفعيل Debug Console logs عند استقبال Snapshots.
+
+إضافة زر “Sample Item” في ResultsScreen للتأكد من العرض حتى بدون WebView.
+
+ملاحظات
+
+لا MITM → كل الاعتراض يتم من داخل الصفحة عبر fetch/XHR patch.
+
+لا حفظ Cookies أو بيانات حساب.
+
+selectors تقريبية وقد تتغير → اجعل الكود مرنًا.
+
+الهدف PoC تعليمي فقط.
