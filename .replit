@@ -1,8 +1,9 @@
 entrypoint = "main.dart"
-modules = ["dart-3.3"]
+modules = ["dart-3.3", "dart-3.8"]
 
 [nix]
 channel="stable-24_05"
+packages = ["flutter", "jdk17", "android-tools"]
 
 [deployment]
 run = ["dart", "main.dart"]
@@ -10,3 +11,31 @@ deploymentTarget = "cloudrun"
 
 [agent]
 expertMode = true
+
+[workflows]
+runButton = "Project"
+
+[[workflows.workflow]]
+name = "Project"
+mode = "parallel"
+author = "agent"
+
+[[workflows.workflow.tasks]]
+task = "workflow.run"
+args = "Flutter Web App"
+
+[[workflows.workflow]]
+name = "Flutter Web App"
+author = "agent"
+
+[workflows.workflow.metadata]
+outputType = "webview"
+
+[[workflows.workflow.tasks]]
+task = "shell.exec"
+args = "cd masab_app && flutter run -d web-server --web-port 5000 --web-hostname 0.0.0.0"
+waitForPort = 5000
+
+[[ports]]
+localPort = 5000
+externalPort = 80
