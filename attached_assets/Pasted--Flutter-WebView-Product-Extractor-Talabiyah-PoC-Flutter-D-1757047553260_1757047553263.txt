@@ -1,0 +1,497 @@
+(Flutter WebView Product Extractor — Talabiyah PoC)**
+
+أريد إنشاء تطبيق موبايل باستخدام **Flutter (Dart)** باسم: **talabiyah\_extract\_poc**.
+
+### الهدف
+
+فتح مواقع **(Shein, Noon, Amazon.ae)** داخل **WebView**، واستخراج بيانات **المنتج** أو **السلة** وعرضها في شاشة نتائج.
+لا تسجيل دخول، لا حالات طلب، لا دفع — فقط **PoC للاستخراج**.
+
+---
+
+## المتطلبات التقنية
+
+* **Flutter SDK** حديث (3.x+)
+* المنصات: **Android + iOS** (الويب ليس مطلوبًا لهذا PoC)
+* الحزم:
+
+  * `webview_flutter` (WebView + JavaScript + JavaScriptChannel)
+  * `flutter_riverpod` (إدارة حالة بسيطة)
+  * `fluttertoast` (تنبيهات سريعة)
+  * `path_provider`, `permission_handler` (اختياريان) لحفظ ملف JSON محليًا (وضع المطوّر)
+* تفعيل **JavaScript** داخل WebView، واستخدام **JavaScriptChannel** باسم **TalaBridge** لإرسال **Snapshots** من الصفحة إلى Dart.
+
+---
+
+## بنية المشروع (Project Structure)
+
+أنشئ الملفات/المجلدات التالية:
+
+```
+lib/
+  main.dart
+  router.dart
+  screens/
+    stores_screen.dart
+    webview_screen.dart
+    results_screen.dart
+  state/
+    extract_store.dart
+    models.dart
+  widgets/
+    fab.dart
+  services/
+    js_injector.dart
+    domain_detector.dart
+assets/
+  injection/
+    bootstrap.js
+    collectors.js
+    adapters/
+      shein.js
+      noon.js
+      amazon-ae.js
+pubspec.yaml
+README.md
+```
+
+* عدّل `pubspec.yaml` لتضمين الأصول:
+
+```yaml
+flutter:
+  assets:
+    - assets/injection/bootstrap.js
+    - assets/injection/collectors.js
+    - assets/injection/adapters/shein.js
+    - assets/injection/adapters/noon.js
+    - assets/injection/adapters/amazon-ae.js
+```
+
+---
+
+## محتويات الملفات (مطلوب توليد الكود)
+
+### 1) `lib/state/models.dart`
+
+عرّف الأنواع التالية:
+
+```dart
+class Price {
+  final double? amount;
+  final String? currency;
+  const Price({this.amount, this.currency});
+}
+
+class Item {
+  final String title;
+  final String url;
+  final String? image;
+  final String? sku;
+  final Map<String, String>? options;
+  final int? qty;
+  final Price? price;
+  final double? estimatedWeightKg;
+  final String? sourceDomain;   // host
+  final String? sourceMethod;   // DOM | JSONLD | NETWORK | META
+  const Item({
+    required this.title,
+    required this.url,
+    this.image,
+    this.sku,
+    this.options,
+    this.qty,
+    this.price,
+    this.estimatedWeightKg,
+    this.sourceDomain,
+    this.sourceMethod,
+  });
+
+  Map<String, dynamic> toJson() => { /* توليد JSON */ };
+  static Item fromJson(Map<String, dynamic> j) { /* parse */ }
+}
+
+class Snapshot {
+  final String type;            // 'product' | 'cart_snapshot'
+  final String origin;          // location.host
+  final DateTime collectedAt;
+  final List<Item> items;
+  final double? subtotal;
+  final String? currency;
+  final Map<String, dynamic>? raw;
+  const Snapshot({
+    required this.type,
+    required this.origin,
+    required this.collectedAt,
+    required this.items,
+    this.subtotal,
+    this.currency,
+    this.raw,
+  });
+
+  Map<String, dynamic> toJson() => { /* ... */ };
+  static Snapshot fromJson(Map<String, dynamic> j) { /* ... */ }
+}
+```
+
+### 2) `lib/state/extract_store.dart` (Riverpod Store)
+
+* مزوّد حالة يحتفظ بـ:
+
+  * `lastOrigin` (آخر host)
+  * `snapshots` (قائمة من `Snapshot`)
+  * `items` (قائمة العناصر المدمجة للعرض)
+* دوال مطلوبة:
+
+  * `addSnapshot(Snapshot s)` → يضيف snapshot ويحدّث `lastOrigin` و`items`
+  * `clear()` لمسح النتائج
+  * `sampleInsert()` لإضافة عنصر تجريبي (dev)
+* استخدم `StateNotifier` أو `Notifier` من Riverpod.
+
+### 3) `lib/widgets/fab.dart`
+
+* زر/أزرار عائمة (FloatingActionButton أو SpeedDial بسيط):
+
+  * **Collect Product**
+  * **Collect Cart**
+  * **Results** (ينقل لشاشة النتائج)
+* كل زر يستدعي `controller.runJavascript(...)` بالأوامر المناسبة.
+
+### 4) `lib/screens/stores_screen.dart`
+
+* أزرار كبيرة (Material) لفتح:
+
+  * **Open Shein** → `https://www.shein.com/` (أو نطاق إقليمي)
+  * **Open Noon** → `https://www.noon.com/uae-en/`
+  * **Open Amazon.ae** → `https://www.amazon.ae/`
+* عند الضغط ينتقل إلى **WebViewScreen** بتمرير `initialUrl`.
+
+### 5) `lib/screens/webview_screen.dart`
+
+* WebView باستخدام `webview_flutter`:
+
+  * `javascriptMode: JavascriptMode.unrestricted`
+  * `navigationDelegate`: السماح بالتنقل داخل نفس الـ WebView
+  * أنشئ `WebViewController` يُحقن فيه:
+
+    * محتوى **bootstrap.js** ثم **collectors.js**
+    * **adapter** المناسب حسب `Uri.host` (باستخدام `domain_detector.dart`)
+* **JavaScriptChannel** باسم **TalaBridge**:
+
+  * الرسالة المتوقعة:
+
+    ```json
+    { "kind": "talabiyah/snapshot", "payload": { ...Snapshot JSON... } }
+    ```
+  * قم بـ `try/catch` للـ JSON، وحوّل إلى `Snapshot`، ثم خزّنه عبر Riverpod.
+* أزرار FAB:
+
+  * **Collect Product** →
+    `window.__talabiyah.collectProduct && window.__talabiyah.collectProduct();`
+  * **Collect Cart** →
+    `window.__talabiyah.collectCart && window.__talabiyah.collectCart();`
+  * **Results** → الانتقال إلى `ResultsScreen`.
+* **Debug Overlay (اختياري):** مستطيل صغير شفاف أعلى الـ WebView لعرض آخر حدث/خطأ من السكربت.
+
+### 6) `lib/screens/results_screen.dart`
+
+* قائمة بطاقات تعرض: صورة مصغّرة | العنوان | السعر | المصدر (host + method)
+* أزرار أعلى الشاشة (وضع المطوّر):
+
+  * **Copy JSON**: ينسخ
+    `JSON.stringify({items, origin, collectedAt}, null, 2)`
+  * **Save JSON** (اختياري): يحفظ `snapshot-<timestamp>.json` داخل Documents (اطلب إذن التخزين على Android فقط).
+  * **Clear** لمسح النتائج.
+  * **Add Sample Item** (dev) لإدخال عنصر اختباري للتأكد أن العرض يعمل بدون WebView.
+
+### 7) `lib/services/js_injector.dart`
+
+* دوال:
+
+  * `Future<String> loadBootstrap();`
+  * `Future<String> loadCollectors();`
+  * `Future<String?> loadAdapterFor(String host);`
+
+    * mapping:
+      `*shein* → adapters/shein.js`
+      `*noon* → adapters/noon.js`
+      `*amazon.ae* → adapters/amazon-ae.js`
+  * `Future<String> buildFullInjection(String host)` → concatenation للثلاثة.
+
+### 8) `lib/services/domain_detector.dart`
+
+* دالة:
+  `String mapHostToAdapter(String host)`
+  ترجع: `"shein" | "noon" | "amazon-ae" | "unknown"`
+
+---
+
+## السكربتات المحقونة (JavaScript)
+
+### 9) `assets/injection/bootstrap.js`
+
+* مساحة اسم:
+  `window.__talabiyah = window.__talabiyah || {};`
+* جسر الإرسال:
+
+  ```js
+  window.__talabiyah.post = function(payload) {
+    try { TalaBridge.postMessage(JSON.stringify(payload)); } catch (e) {}
+  };
+  ```
+* **Patch** لـ `fetch` و`XMLHttpRequest`:
+
+  * تتبّع آخر استجابة لمسارات تحتوي:
+    `/cart`, `/api/cart`, `/checkout/cart`
+  * خزّن في:
+    `window.__talabiyah.lastCartResponse = { url, status, bodyJson }`
+* Utilities:
+
+  * `readJSONLD(type)` → يرجع أول `application/ld+json` مطابق (Product / ItemList …)
+  * `q(sel)` و`qa(sel)` اختصارات DOM
+  * `absUrl(u)` لتحويل الروابط إلى مطلقة
+* اطبع `console.debug` عند التهيئة (اختياري لو Debug Toggle مفعّل).
+
+### 10) `assets/injection/collectors.js`
+
+* يضيف:
+
+  * `window.__talabiyah.detectPage()`
+    يرجع `{ kind: 'product'|'cart'|'unknown', origin: location.host }`
+  * `window.__talabiyah.collectProduct()`:
+
+    1. JSON-LD (Product) → title, images, offers(price/priceCurrency), sku
+    2. DOM عبر `adapters.current.collectProductDOM()`
+    3. META احتياطي (og\:title, og\:image)
+    4. يبني `Item` ويرسل:
+
+       ```js
+       window.__talabiyah.post({
+         kind: 'talabiyah/snapshot',
+         payload: {
+           type: 'product',
+           origin: location.host,
+           collected_at: new Date().toISOString(),
+           items: [item],
+           raw: {}
+         }
+       });
+       ```
+  * `window.__talabiyah.collectCart()`:
+
+    1. يحاول `lastCartResponse`
+    2. DOM عبر `adapters.current.collectCartDOM()`
+    3. JSON-LD (ItemList) كملاذ أخير
+    4. يرسل `Snapshot` بـ `type: 'cart_snapshot'` + `totals` إن وجدت
+  * يحمّل ويعيّن الـ adapter المناسب في:
+    `window.__talabiyah.adapters.current`
+
+### 11) `assets/injection/adapters/shein.js`
+
+* عرّف:
+
+  ```js
+  window.__talabiyah.adapters = window.__talabiyah.adapters || {};
+  window.__talabiyah.adapters.shein = {
+    collectProductDOM() {
+      const title = document.querySelector('h1.product-title')?.innerText
+        || document.querySelector('[data-testid="title"]')?.innerText
+        || document.querySelector('meta[property="og:title"]')?.content;
+      // التقط السعر عبر بدائل متعددة (class .price, [data-testid*="price"], meta[itemprop="price"])
+      // الصورة من معرض الصور أو og:image
+      // أعد كائن Item أو null لو فشل
+    },
+    collectCartDOM() {
+      // ابحث عناصر السلة (.bag-item ...) واستخرج name/qty/price/image
+      // أعد { items:[...], totals:{ subtotal, currency } } أو null
+    }
+  };
+  ```
+* استخدم بدائل متعددة للـ selectors ولا تفشل صامتًا؛ اطبع سبب الفشل للـ console عند Debug.
+
+### 12) `assets/injection/adapters/noon.js`
+
+* المنتج: `[data-qa="pdp-title"]`, `[data-qa="price"]`, صور من المعرض
+* السلة: `[data-qa="cart-item"]`, المجموع `[data-qa="cart-summary-subtotal"]`
+* نفس نهج تعدد الـ selectors + إرجاع null عند الفشل مع console.debug.
+
+### 13) `assets/injection/adapters/amazon-ae.js`
+
+* المنتج:
+
+  * العنوان: `#productTitle`
+  * السعر: `#corePrice_feature_div .a-offscreen`
+  * الصورة: `#imgTagWrapperId img` أو `#landingImage`
+* السلة: صفحة `/gp/cart/view.html`
+
+  * العناصر: `.sc-list-item-content`
+  * الحقول: `.sc-product-title`, `.a-dropdown-prompt` (الكمية), `.sc-product-price`
+* طبّق نفس قواعد المرونة.
+
+---
+
+## إعدادات Android / iOS
+
+### Android
+
+* **`android/app/src/main/AndroidManifest.xml`**
+
+  * أضف:
+
+    ```xml
+    <uses-permission android:name="android.permission.INTERNET"/>
+    ```
+* **Network Security (اختياري للاختبارات):**
+
+  * إنشاء `xml/network_security_config.xml` لتمكين cleartext عند الحاجة، واضبط:
+
+    ```xml
+    <application
+      android:usesCleartextTraffic="true"
+      android:networkSecurityConfig="@xml/network_security_config">
+    ```
+* فعّل `mixedContentMode` في WebView عبر إعدادات `webview_flutter` (Android) عند الحاجة.
+
+### iOS
+
+* **Podfile**: اجعل **الحد الأدنى iOS 14.0** (يُقبل 13.0 إن أردت)
+
+  ```ruby
+  platform :ios, '14.0'
+  post_install do |installer|
+    installer.pods_project.targets.each do |target|
+      target.build_configurations.each do |config|
+        config.build_settings['IPHONEOS_DEPLOYMENT_TARGET'] = '14.0'
+      end
+    end
+  end
+  ```
+* **Info.plist** (ATS للتجارب فقط):
+
+  ```xml
+  <key>NSAppTransportSecurity</key>
+  <dict>
+    <key>NSAllowsArbitraryLoads</key><true/>
+    <key>NSAllowsArbitraryLoadsInWebContent</key><true/>
+  </dict>
+  ```
+* استخدم WKWebView الافتراضي (حزمة `webview_flutter_wkwebview` تُدار تلقائيًا عبر federated plugin).
+
+---
+
+## بروتوكول الرسائل (JS → Flutter)
+
+* كل رسالة من الصفحة إلى التطبيق تكون:
+
+```json
+{
+  "kind": "talabiyah/snapshot",
+  "payload": {
+    "type": "product" | "cart_snapshot",
+    "origin": "<location.host>",
+    "collected_at": "<ISO8601>",
+    "items": [ /* Array<Item> */ ],
+    "subtotal": 123.45,
+    "currency": "AED",
+    "raw": { /* optional debug */ }
+  }
+}
+```
+
+* Dart يقوم بـ `try { jsonDecode(...) } catch (_) {}` ثم `Snapshot.fromJson(...)` وإرسالها لـ Riverpod store.
+* في وضع الـ Debug: اطبع `debugPrint('JS→Dart: ...')`.
+
+---
+
+## واجهة المستخدم (UI/UX)
+
+* **StoresScreen**:
+
+  * أزرار كبيرة: “Open Shein”, “Open Noon”, “Open Amazon.ae”
+  * تلميح “PoC / Developer Mode”
+
+* **WebViewScreen**:
+
+  * شريط علوي بعنوان الدومين الحالي
+  * **FABs**: Collect Product / Collect Cart / Results
+  * **Toast** عند نجاح الجمع أو رسالة إرشادية عند الفشل
+  * **Debug Overlay** (اختياري)
+
+* **ResultsScreen**:
+
+  * بطاقات العناصر (صورة | عنوان | سعر | مصدر)
+  * أزرار: Copy JSON / Save JSON / Clear / **Add Sample Item (dev)**
+  * عند ضغط عنصر: بطاقة تفاصيل بكل الحقول المتاحة
+
+* تصميم **Material 3**، LTR الآن مع جاهزية RTL لاحقًا.
+
+---
+
+## سلوكيات مطلوبة
+
+* تصفّح **Guest** فقط؛ لا تسجيل دخول.
+* السماح بالتنقل داخل نفس WebView (`navigationDelegate`).
+* عند تغيير `URL/host` → **أعد الحقن** (bootstrap → collectors → adapter).
+* **Timeouts / حماية**:
+
+  * إن فشل `collectProduct()` أظهر تنبيه “اذهب مباشرة لصفحة المنتج”
+  * إن فشل `collectCart()` أظهر “اذهب لصفحة السلة/أعد المحاولة بعد إضافة عناصر”
+* **Mixed content**: فعّله على Android عند الحاجة.
+* لا تخزن Cookies أو بيانات شخصية.
+
+---
+
+## README — تشغيل واختبار
+
+* التشغيل:
+
+  ```bash
+  flutter pub get
+  # iOS:
+  cd ios && pod install && cd ..
+  flutter run -d ios
+  # Android:
+  flutter run -d android
+  ```
+
+* اختبار يدوي:
+
+  1. افتح **Shein** من Stores → ادخل صفحة منتج → **Collect Product** → افتح **Results** وتحقق من العنصر.
+  2. أضف عنصرين إلى سلة **Noon** → افتح صفحة السلة → **Collect Cart** → تحقق من العناصر + subtotal.
+  3. جرّب **Amazon.ae**: صفحة منتج بسيطة → **Collect Product**.
+  4. **Copy JSON** وتحقق من الحقول: `title, image, url, price.currency/amount`.
+
+* ملاحظات:
+
+  * PoC تعليمي؛ selectors تتغير باستمرار.
+  * Safari Web Inspector: فعّل **Develop menu** لمراقبة Console داخل WebView (Develop → Simulator → App).
+  * استخدم **Hot Reload** (r) و**Hot Restart** (R) أثناء التطوير.
+
+---
+
+## مهام Replit Agent — نفّذها الآن
+
+1. تهيئة مشروع Flutter باسم **talabiyah\_extract\_poc**.
+2. إضافة الحزم (`webview_flutter`, `flutter_riverpod`, `fluttertoast`, `path_provider`, `permission_handler`) وتحديث `pubspec.yaml` لتضمين الأصول المذكورة.
+3. إنشاء البنية والملفات أعلاه و**توليد الكود الكامل** لكل ملف بالمواصفات المذكورة (Dart + JS).
+4. إعداد **WebView + JavaScriptChannel (TalaBridge)** واستقبال الرسائل وتحويلها إلى `Snapshot` وتخزينها في Riverpod.
+5. تطبيق **UI Material 3** بسيط وجذاب، مع زر **Sample Item** في ResultsScreen، و**Debug Overlay** (اختياري).
+6. تفعيل سجلات `debugPrint` عند استقبال الـ Snapshot.
+7. iOS:
+
+   * ضبط **Podfile** على `platform :ios, '14.0'` وإضافة `post_install` لضمان نفس الحد الأدنى لكل الـ Pods.
+   * إضافة مفاتيح **ATS** في `Info.plist` كما أعلاه (لغرض الاختبارات فقط).
+8. Android:
+
+   * إضافة صلاحية الإنترنت في `AndroidManifest.xml`.
+   * تهيئة `network_security_config` والـ `usesCleartextTraffic="true"` (اختياري للاختبارات).
+9. توفير **README.md** يشرح التشغيل والاختبار والملاحظات والقيود.
+
+---
+
+## قيود وأخلاقيات
+
+* هذا PoC لأغراض تعليمية داخلية فقط؛ **احترم سياسات المواقع**.
+* لا تجمع بيانات حساسة، ولا تحفظ Cookies/حسابات.
+* لا MITM خارج WebView — أي اعتراض يتم داخله فقط عبر Patch `fetch/XHR`.
+
+---
