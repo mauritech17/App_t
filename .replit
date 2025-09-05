@@ -22,19 +22,19 @@ author = "agent"
 
 [[workflows.workflow.tasks]]
 task = "workflow.run"
-args = "Flutter Web App"
+args = "Talabiyah Extract PoC"
 
 [[workflows.workflow]]
-name = "Flutter Web App"
+name = "Talabiyah Extract PoC"
 author = "agent"
-
-[workflows.workflow.metadata]
-outputType = "webview"
 
 [[workflows.workflow.tasks]]
 task = "shell.exec"
-args = "cd masab_app && flutter run -d web-server --web-port 5000 --web-hostname 0.0.0.0"
+args = "cd talabiyah_extract_poc && flutter run -d web-server --web-port 5000 --web-hostname 0.0.0.0"
 waitForPort = 5000
+
+[workflows.workflow.metadata]
+outputType = "webview"
 
 [[ports]]
 localPort = 5000
